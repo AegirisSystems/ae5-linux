@@ -2,6 +2,12 @@
 const $ = selector => document.querySelector(selector);
 const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 let DATA = null, PAGE = 'sbx', BUSY = false, REQUEST = 0, PROFILE = null;
+let READING = 0, POINTER_ACTIVE = false, KEY_ACTIVE = false, CONNECTED = false, SYNC_TIMER = null;
+function editingControl() {
+  return POINTER_ACTIVE || KEY_ACTIVE || $('#confirm').open || !!document.querySelector('[data-control][data-dirty="true"]') ||
+    !!document.activeElement?.matches('#page input[type="number"], #page select');
+}
+function stateSignature(data) { return JSON.stringify([data.card,data.controls,data.state]); }
 const titles = {playback:'Playback',sbx:'SBX profile',equalizer:'Equalizer',recording:'Recording',mixer:'Mixer',profiles:'Saved profiles',history:'Listening history',status:'Device status',features:'Feature support'};
 const intros = {
   playback:'Your output, listening level, and DAC settings.',
@@ -58,7 +64,7 @@ function control(c, {compact=false}={}) {
     }
     return `<div class="readback">${esc(v)}</div>`;
   }).join('');
-  return `<form class="control" data-control="${c.numid}"><div class="control-head"><label>${esc(pretty(c))}</label><small>${esc(c.name)}</small></div><div class="control-body"><div class="editors">${editors}</div>${c.locked?'':`<button type="submit" disabled>Apply</button>`}</div>${c.locked?`<p class="locked-note">${esc(c.locked)}</p>`:''}${c.protected?'<p class="hint">Hardware setting. Changing this requires a separate confirmation.</p>':''}</form>`;
+  return `<form class="control" data-control="${c.numid}"><div class="control-head"><label>${esc(pretty(c))}</label><small>${esc(c.name)}</small></div><div class="control-body"><div class="editors">${editors}</div>${c.locked?'':`<button type="submit" disabled hidden>Apply</button>`}</div>${c.locked?`<p class="locked-note">${esc(c.locked)}</p>`:''}${c.protected?'<p class="hint">Hardware setting. Changing this requires a separate confirmation.</p>':''}</form>`;
 }
 function panel(heading,controls) {return `<section class="panel"><h2>${esc(heading)}</h2>${controls.length?controls.map(c=>control(c)).join(''):'<p class="muted">This driver does not expose a control for this section.</p>'}</section>`;}
 function heading(extra='') {return `<div class="page-heading"><div><h1>${titles[PAGE]}</h1><p>${intros[PAGE]}</p></div>${extra}</div>`;}
@@ -103,7 +109,7 @@ function renderRecording() {
   return heading()+panel('Input and recording levels',cs.filter(c=>!voice(c)))+directNotice()+panel('Voice processing',cs.filter(voice));
 }
 function renderMixer() {
-  return heading('<label class="sr-only" for="search">Find a mixer control</label><input class="search" type="text" id="search" placeholder="Find a control…">')+panel('Playback and digital output',DATA.controls.filter(c=>c.section==='mixer'))+'<p class="hint">L and R are edited independently. Apply writes only this control. Refresh reads changes made in other applications.</p>';
+  return heading('<label class="sr-only" for="search">Find a mixer control</label><input class="search" type="text" id="search" placeholder="Find a control…">')+panel('Playback and digital output',DATA.controls.filter(c=>c.section==='mixer'))+'<p class="hint">Changes apply when you release a slider, choose an option, or finish entering a number. L and R remain independent. Settings sync automatically with the AE-5.</p>';
 }
 function renderProfiles() {
   return heading()+`<section class="panel"><h2>Save the current AE-5 settings</h2><p class="muted">Export a JSON profile to this computer. Headphone gain, output selection, and speaker topology are excluded. Exporting does not change your sound.</p><div class="actions"><button id="export" class="primary">Export current profile</button><button id="import">Import and review…</button></div></section><section class="panel"><h2>Profile review</h2><div id="profile-review" class="muted">Choose a profile to see its exact changes before applying it.</div></section>`;
@@ -117,7 +123,7 @@ function renderStatus() {
 }
 function renderFeatures() {
   const rows=[
-    ['Playback and mixer','AE-5 output controls, channel levels, mutes, headphone gain preset, and DAC filter. Every write requires Apply; hardware output and gain changes require confirmation.'],
+    ['Playback and mixer','AE-5 output controls, channel levels, mutes, headphone gain preset, and DAC filter. Changes apply on release or selection; hardware output and gain changes require confirmation.'],
     ['SBX and equalizer','Linux acoustic engine controls, ten EQ bands, and the driver’s preset list. Direct playback bypasses these effects; stored values are displayed without changing them.'],
     ['Recording','AE-5 inputs, capture levels, mic boost, What U Hear, and available voice processing controls.'],
     ['Profiles and history','Profile export, a change preview before import, ALSA readback history, and your own listening notes.'],
@@ -128,27 +134,39 @@ function renderFeatures() {
   ];
   return heading()+`<section class="panel">${rows.map(([name,detail])=>`<div class="support-row"><strong>${name}</strong><p>${detail}</p></div>`).join('')}<p class="support-link">Independent AegAudio interface inspired by <a href="https://download.creative.com/manualdn/Manuals/TSD/14190/qfWrGlGToW/Sound%20Blaster%20Command%20Software%20Guide.pdf" target="_blank" rel="noreferrer">Creative’s Sound Blaster Command layout</a>. It is not Creative’s Windows application.</p></section>`;
 }
-function updateStatus() {
+function updateStatus(force=false) {
   const q=quality();$('#connection').textContent=`Connected · ALSA card ${DATA.card.index}`;
   $('#mode').textContent=DATA.state.direct?'Direct mode active':'Standard playback';
   $('#output-status').textContent='Output · '+valueLabel(find('Output Select'));
   $('#front-status').textContent='Front · '+valueLabel(find('Front Playback Switch'));
   $('#format-status').textContent=q.rate+' · '+q.format;
-  $('#updated').textContent='Read at '+new Date(DATA.captured_at).toLocaleTimeString();
+  $('#updated').textContent='Live · '+new Date(DATA.captured_at).toLocaleTimeString();
   $('#footer-engine').textContent=DATA.state.direct?'DIRECT':'SBX';
   const volume=find('Master Playback Volume'),mute=find('Master Playback Switch');
+  const footerSignature=JSON.stringify([volume,mute]);
+  if(force || $('#footer-volume').dataset.signature!==footerSignature) {
   $('#footer-volume').innerHTML=volume?`<button id="master-mute" aria-label="${mute?.values.includes('off')?'Unmute':'Mute'} master">${mute?.values.includes('off')?'◖×':'◖))'}</button><label class="sr-only" for="master-volume">Master volume</label><input id="master-volume" type="range" min="${volume.min}" max="${volume.max}" value="${volume.values[0]}"><output id="master-percent">${Math.round(Number(volume.values[0])/volume.max*100)}%</output>`:'';
   if(volume){$('#master-volume').oninput=e=>$('#master-percent').textContent=Math.round(Number(e.target.value)/volume.max*100)+'%';$('#master-volume').onchange=e=>writeControl(volume,[e.target.value]);}
   if(mute)$('#master-mute').onclick=()=>writeControl(mute,mute.values.map(v=>v==='on'?'off':'on'));
+  $('#footer-volume').dataset.signature=footerSignature;
+  }
   const master=find('Master Playback Switch'),front=find('Front Playback Switch');
   const muted=(master?.values.includes('off')||front?.values.includes('off')||DATA.state.dacs.find(d=>d.node==='0x02')?.muted.some(Boolean));
   $('#mute-warning').hidden=!muted;$('#mute-warning').textContent='Master, Front, or the Front DAC reports a muted channel. Review Listening level and Device status. No automatic unmute is performed.';
 }
 function render() {
   if(!DATA)return;
+  const focused=document.activeElement?.id;
+  const openDetails=[...document.querySelectorAll('#page details')].map(d=>d.open);
+  const search=$('#search')?.value;
+  const digital=$('[data-local-tab="digital"]')?.classList.contains('selected');
   document.querySelectorAll('[data-page]').forEach(b=>{b.classList.toggle('active',b.dataset.page===PAGE);b.setAttribute('aria-current',b.dataset.page===PAGE?'page':'false');});
   const renderers={playback:renderPlayback,sbx:renderSbx,equalizer:renderEq,recording:renderRecording,mixer:renderMixer,profiles:renderProfiles,history:renderHistory,status:renderStatus,features:renderFeatures};
-  $('#page').innerHTML=renderers[PAGE]();bind();updateStatus();
+  $('#page').innerHTML=renderers[PAGE]();bind();updateStatus(true);
+  document.querySelectorAll('#page details').forEach((d,i)=>d.open=!!openDetails[i]);
+  if(search && $('#search')) {$('#search').value=search;$('#search').dispatchEvent(new Event('input'));}
+  if(digital && $('#digital-view')) {$('#analog-view').hidden=true;$('#digital-view').hidden=false;document.querySelectorAll('[data-local-tab]').forEach(b=>b.classList.toggle('selected',b.dataset.localTab==='digital'));}
+  if(focused)document.getElementById(focused)?.focus({preventScroll:true});
 }
 async function confirmChange(title,text,detail='') {
   $('#confirm-title').textContent=title;$('#confirm-text').textContent=text;$('#confirm-detail').textContent=detail;
@@ -157,18 +175,33 @@ async function confirmChange(title,text,detail='') {
 }
 async function writeControl(c,values) {
   if(BUSY||c.locked)return;
+  if(!CONNECTED){message('AE-5 connection is unavailable. Waiting to reconnect.',true);return;}
   if(c.protected&&!await confirmChange('Change '+pretty(c)+'?','This changes a hardware output or amplifier setting.',`${valueLabel(c)} → ${c.type==='ENUMERATED'?c.items[Number(values[0])]:values.join(' / ')}`)){render();return;}
-  BUSY=true;
+  BUSY=true;++REQUEST;
   try{await api('/api/set',{key:c.key,expected:c.values,values,confirmed:!!c.protected});message(`${pretty(c)} applied. ALSA readback matched.`);}
   catch(error){message(error.message,true);}
   finally{BUSY=false;await refresh();}
 }
-async function refresh() {
-  if(BUSY)return;
-  const request=++REQUEST;$('#refresh').disabled=true;
-  try {const data=await api('/api/state');if(request!==REQUEST)return;DATA=data;render();}
-  catch(error){message(error.message,true);$('#connection').textContent='Device unavailable';$('#mode').textContent='State unavailable';document.querySelectorAll('#page button,#page input,#page select').forEach(el=>el.disabled=true);}
-  finally{$('#refresh').disabled=false;}
+async function refresh({background=false}={}) {
+  if(BUSY || (background && (READING || document.hidden || editingControl())))return;
+  const request=++REQUEST;READING++;if(!background)$('#refresh').disabled=true;
+  try {
+    const data=await api('/api/state');
+    if(request!==REQUEST || BUSY || (background && editingControl()))return;
+    const changed=!DATA || stateSignature(data)!==stateSignature(DATA);
+    const recovered=!CONNECTED;CONNECTED=true;DATA=data;
+    if(!background || (changed && !['profiles','history'].includes(PAGE)))render();
+    else updateStatus();
+    $('#refresh').title='Live sync every second. Click to reload all settings.';
+    if(recovered && $('#message').dataset.connectionError==='true'){message('AE-5 connection restored.');delete $('#message').dataset.connectionError;}
+    if(background && PAGE==='history')await loadHistory();
+  }
+  catch(error){
+    if(request!==REQUEST)return;
+    CONNECTED=false;message('Live sync unavailable: '+error.message,true);$('#message').dataset.connectionError='true';
+    $('#connection').textContent='Device unavailable';$('#mode').textContent='State unavailable';$('#updated').textContent='Offline · retrying';
+  }
+  finally{READING--;if(!background)$('#refresh').disabled=false;}
 }
 function download(name,data) {const url=URL.createObjectURL(new Blob([JSON.stringify(data,null,2)],{type:'application/json'}));const a=document.createElement('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}
 async function loadHistory() {
@@ -230,13 +263,16 @@ function bind() {
         const value=event.target.value;form.querySelector(`[data-i="${i}"]`).value=value;form.querySelector(`[data-number="${i}"]`).value=value;form.querySelector(`[data-output="${i}"]`).textContent=level(c,value);
       }
       button.disabled=JSON.stringify(values())===JSON.stringify(c.values);
+      form.dataset.dirty=String(!button.disabled);
     });
+    form.addEventListener('change',()=>{if(button && !button.disabled && form.checkValidity())form.requestSubmit(button);});
     form.addEventListener('submit',async event=>{
       event.preventDefault();if(BUSY||c.locked)return;
+      if(!CONNECTED){message('AE-5 connection is unavailable. Waiting to reconnect.',true);return;}
       if(!form.reportValidity())return;
       const requested=values();
-      if(c.protected && !await confirmChange('Change '+pretty(c)+'?',`This changes a hardware output or amplifier setting.`,`${valueLabel(c)} → ${c.type==='ENUMERATED'?c.items[Number(requested[0])]:requested.join(' / ')}`))return;
-      BUSY=true;button.disabled=true;
+      if(c.protected && !await confirmChange('Change '+pretty(c)+'?',`This changes a hardware output or amplifier setting.`,`${valueLabel(c)} → ${c.type==='ENUMERATED'?c.items[Number(requested[0])]:requested.join(' / ')}`)){render();return;}
+      BUSY=true;++REQUEST;button.disabled=true;form.dataset.dirty='false';
       try{await api('/api/set',{key:c.key,expected:c.values,values:requested,confirmed:c.protected});message(`${pretty(c)} applied. ALSA readback matched.`);}
       catch(error){message(error.message,true);}
       finally{BUSY=false;await refresh();}
@@ -263,4 +299,12 @@ $('#profile-file').onchange=async event=>{
 };
 document.querySelectorAll('[data-page]').forEach(button=>button.onclick=()=>{if(BUSY)return;PAGE=button.dataset.page;PROFILE=null;render();});
 $('#refresh').onclick=()=>refresh();
+document.addEventListener('pointerdown',event=>{if(event.target.closest('[data-control],[data-dial],#interactive-eq,#footer-volume'))POINTER_ACTIVE=true;});
+document.addEventListener('pointerup',()=>{POINTER_ACTIVE=false;});
+document.addEventListener('pointercancel',()=>{POINTER_ACTIVE=false;});
+document.addEventListener('keydown',event=>{if(['ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Home','End'].includes(event.key)&&event.target.closest('[role="slider"],#footer-volume'))KEY_ACTIVE=true;});
+document.addEventListener('keyup',()=>{KEY_ACTIVE=false;});
+window.addEventListener('blur',()=>{POINTER_ACTIVE=false;KEY_ACTIVE=false;});
+async function syncLoop(){try{await refresh({background:true});}finally{clearTimeout(SYNC_TIMER);SYNC_TIMER=setTimeout(syncLoop,1000);}}
 refresh();
+SYNC_TIMER=setTimeout(syncLoop,1000);

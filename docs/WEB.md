@@ -24,7 +24,8 @@ Only one codec `0x11020011` with subsystem `0x11020051` is accepted. The server 
 
 ## Operation
 
-- Rotary effects apply when the user releases a drag or an arrow key. Switches and dropdowns apply on explicit user interaction. The mixer offers Apply for each control and keeps left/right values separate.
+- Rotary effects apply when the user releases a drag or an arrow key. Switches and dropdowns apply on explicit user interaction. Mixer changes apply on slider release or selection; numeric edits apply on blur or Enter. Left/right values remain separate.
+- The visible page polls the AE-5 about once per second after the preceding read completes. External control changes update the UI automatically. Polling never writes controls. In-flight reads cannot overwrite a newer user write. Active drags, keyboard adjustments, unfinished numeric edits and confirmation dialogs hold background updates. Saved-profile previews and listening-note drafts survive background reads; network failures show an offline status and reconnect automatically. Hidden browser tabs pause polling.
 - The equalizer has draggable and keyboard-adjustable points. Labels use the Linux driver's band indices because this source does not advertise center frequencies. Fine numeric values are available in an expandable section.
 - Master volume and mute are in the bottom strip. Output and headphone gain changes require confirmation and are unavailable during active Direct playback.
 - Direct mode and audio quality are read-only indicators in this web release. It does not invoke the Direct lifecycle helper, change kernel module parameters, restart services, or play a test signal.
