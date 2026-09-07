@@ -4,10 +4,13 @@ from pathlib import Path
 import json
 import re
 import subprocess
+from . import dac_settings
 
 HEAD = re.compile(r"^numid=(\d+),iface=(\w+),name='(.*?)'(.*)$", re.M)
 PROTECTED = {'AE-5: Headphone Gain', 'Output Select',
              'HP/Speaker Auto Detect Playback Switch', 'Surround Channel Config'}
+DIRECT_DAC = 'AE-5: Direct DAC Playback Volume'
+PROFILE_EXCLUDED = PROTECTED | {DIRECT_DAC}
 
 def run(args):
     p = subprocess.run(args, capture_output=True, text=True, timeout=20)
@@ -85,13 +88,14 @@ def validate(c, values):
 
 def set_control(selected, old, values, allow_protected=False):
     card=current_card(selected)
-    matches=[c for c in controls(card) if c['key']==old['key']]
+    all_controls=controls(card)
+    matches=[c for c in all_controls if c['key']==old['key']]
     if len(matches)!=1:raise RuntimeError('Control no longer resolves uniquely.')
     c=matches[0]
     if c['name'] in PROTECTED and not allow_protected:
         raise ValueError('Output/gain changes require an explicit selection outside profiles.')
     processing=(c['name'].startswith(('FX:','EQ Band','Enable InFX','Enable OutFX','VoiceFX')))
-    if (c['name'] in PROTECTED or processing) and state(card)['direct']:
+    if (c['name'] in PROTECTED or processing) and state(card,all_controls)['direct']:
         raise ValueError('Direct playback became active. Stop Direct mode before changing this control.')
     if c['values']!=old['values']:
         raise RuntimeError('Control changed externally. Refresh before applying your change.')
@@ -99,9 +103,14 @@ def set_control(selected, old, values, allow_protected=False):
     run(['amixer','-c',str(card['index']),'cset',f"numid={c['numid']}",','.join(values)])
     readback=[x for x in controls(card) if x['key']==c['key']][0]
     if readback['values']!=values:raise RuntimeError('ALSA readback differs from the requested value.')
+    if c['name']==DIRECT_DAC:
+        try:
+            dac_settings.save(dac_settings.preference_path(Path.home()),dac_settings.identity(card),values)
+        except (OSError,ValueError) as exc:
+            raise RuntimeError('DAC level was applied, but saving it for restart failed: '+str(exc)) from exc
     return readback
 
-def state(card):
+def state(card, all_controls=None):
     base=Path(f"/proc/asound/card{card['index']}")
     streams={str(p.relative_to(base)):p.read_text().strip() for p in base.glob('pcm*/sub*/hw_params')}
     codec='\n'.join(p.read_text(errors='replace') for p in base.glob('codec#*'))
@@ -113,7 +122,10 @@ def state(card):
             values=amp[1].split();dacs.append(dict(node=head[1],amps=values,
                 muted=[bool(int(v,16)&128) for v in values]))
     # PCM state is accessible to the seat user; no elevation or active probe.
-    direct=any('rate: 384000 ' in s and 'format: S32_LE' in s for s in streams.values())
+    active=next((c for c in (all_controls if all_controls is not None else controls(card))
+                 if c['name']=='AE-5: Direct Active'),None)
+    direct=(active['values']==['on'] if active else
+            any('rate: 384000 ' in s and 'format: S32_LE' in s for s in streams.values()))
     return dict(streams=streams,dacs=dacs,direct=direct,
                 evidence='PCM format and amplifier registers; audibility is not measured.')
 
@@ -121,7 +133,7 @@ def profile(card, all_controls):
     return dict(schema=1, vendor=card['vendor'],subsystem=card['subsystem'],
                 controls=[{k:c[k] for k in ('key','name','type','values')} for c in all_controls
                           if c['iface']=='MIXER' and c['writable'] and c['type'] in ('BOOLEAN','INTEGER','ENUMERATED')
-                          and c['name'] not in PROTECTED])
+                          and c['name'] not in PROFILE_EXCLUDED])
 
 def profile_plan(card, data):
     if not isinstance(data,dict) or data.get('schema')!=1:
@@ -133,7 +145,7 @@ def profile_plan(card, data):
     available={c['key']:c for c in controls(current_card(card))};plan=[];seen=set()
     for row in rows:
         c=available.get(row['key'])
-        if not c or c['key'] in seen or c['name'] in PROTECTED:
+        if not c or c['key'] in seen or c['name'] in PROFILE_EXCLUDED:
             raise ValueError('Unknown, duplicate, or protected control in profile.')
         seen.add(c['key']);values=validate(c,row['values'])
         if c['values']!=values:plan.append((c,values))

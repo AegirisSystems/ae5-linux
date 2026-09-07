@@ -7,7 +7,7 @@ from pathlib import Path
 from PySide6.QtCore import Qt, QPointF, QProcess, Signal
 from PySide6.QtGui import QColor, QPainter, QPen, QPolygonF
 from PySide6.QtWidgets import (QApplication,QMainWindow,QWidget,QVBoxLayout,QHBoxLayout,
-    QLabel,QPushButton,QComboBox,QCheckBox,QSpinBox,QScrollArea,QStackedWidget,
+    QLabel,QPushButton,QComboBox,QCheckBox,QSpinBox,QDoubleSpinBox,QScrollArea,QStackedWidget,
     QListWidget,QFileDialog,QMessageBox,QFrame,QSlider)
 from . import backend, __version__
 
@@ -100,7 +100,7 @@ class Window(QMainWindow):
             self.banner.setText('No ALSA cards found. AegAudio needs Linux and an accessible sound device.');return
         try:
             if self.snapshot:self.cs=self.snapshot['controls'];self.hw=self.snapshot['state']
-            else:self.cs=backend.controls(self.card);self.hw=backend.state(self.card)
+            else:self.cs=backend.controls(self.card);self.hw=backend.state(self.card,self.cs)
             self.draw_pages()
         except Exception as exc:self.error(exc)
     def draw_pages(self):
@@ -110,7 +110,7 @@ class Window(QMainWindow):
         master=next((c for c in self.cs if c['name']=='Master Playback Switch'),None)
         front=next((c for c in self.cs if c['name']=='Front Playback Switch'),None)
         muted=bool((master and 'off' in master['values']) or (front and 'off' in front['values']))
-        mode='384 kHz / 32-bit PCM active' if direct else 'Standard ALSA playback'
+        mode='Direct mode active' if direct else 'Standard ALSA playback'
         self.banner.setText(('OFFLINE SNAPSHOT · ' if self.snapshot else '')+mode+(' · MASTER OR FRONT MUTED' if muted else ''))
         self.banner.setObjectName('muted' if muted else '')
         for name in ('Playback','Acoustic effects','Equalizer','Recording','Mixer','Profiles','Driver status','Other Windows features'):
@@ -161,18 +161,23 @@ class Window(QMainWindow):
         for i,v in enumerate(c['values'][:16]):
             if c['type']=='BOOLEAN':w=QCheckBox('L' if i==0 and c['count']==2 else 'R' if i==1 and c['count']==2 else 'On');w.setChecked(v=='on')
             elif c['type']=='ENUMERATED':w=QComboBox();w.addItems(c['items']);w.setCurrentIndex(int(v))
+            elif c['name']==backend.DIRECT_DAC:
+                w=QDoubleSpinBox();w.setRange(-127.5,0);w.setSingleStep(0.5);w.setDecimals(1)
+                w.setSuffix(' dB');w.setValue((int(v)-255)/2)
             elif c['type']=='INTEGER':w=QSpinBox();w.setRange(c['min'],c['max']);w.setValue(int(v))
             else:w=QLabel(v)
             w.setEnabled(editable);editors.append(w);line.addWidget(w)
         apply=QPushButton('Apply');apply.setEnabled(editable);line.addWidget(apply)
         def submit():
             values=[('on' if w.isChecked() else 'off') if c['type']=='BOOLEAN' else
-                    str(w.currentIndex()) if c['type']=='ENUMERATED' else str(w.value()) for w in editors]
+                    str(w.currentIndex()) if c['type']=='ENUMERATED' else
+                    str(round(w.value()*2+255)) if c['name']==backend.DIRECT_DAC else str(w.value()) for w in editors]
             self.write(c,values)
         apply.clicked.connect(submit);row.addLayout(line)
         if 'db_min' in c:
             row.addWidget(hint('Current level: '+', '.join(f"{c['db_min']+(int(v)-c.get('min',0))*c['db_step']:+.1f} dB" for v in c['values'])))
         if c['name']=='AE-5: Headphone Gain':row.addWidget(hint('Amplifier gain is excluded from saved profiles. An explicit confirmation is required to change it.'))
+        if c['name']==backend.DIRECT_DAC:row.addWidget(hint('DAC attenuation is separate from amplifier gain. Panel changes are saved for the next Direct activation.'))
         return frame
     def write(self,c,values):
         if self.snapshot:return
@@ -183,7 +188,7 @@ class Window(QMainWindow):
             self.footer.setText(c['name']+' updated; ALSA readback matched.');self.refresh()
         except Exception as exc:self.error(exc);self.refresh()
     def profile_page(self,lay):
-        lay.addWidget(hint('Profiles save named ALSA controls. They exclude headphone gain, output selection and speaker configuration. Applying a profile can change volumes and mutes.'))
+        lay.addWidget(hint('Profiles save named ALSA controls. They exclude Direct DAC volume, headphone gain, output selection and speaker configuration. Applying a profile can change other volumes and mutes.'))
         save=QPushButton('Export current profile…');save.clicked.connect(self.save_profile);lay.addWidget(save)
         load=QPushButton('Import and review profile…');load.setEnabled(not self.snapshot);load.clicked.connect(self.load_profile);lay.addWidget(load)
         lay.addWidget(hint('Profile files are portable between matching codec/subsystem IDs. No profile is automatically loaded or applied on startup.'))

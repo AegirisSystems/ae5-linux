@@ -50,7 +50,7 @@ def control_lock(c, direct):
 def current_state():
     card = ae5()
     controls = backend.controls(card)
-    state = backend.state(card)
+    state = backend.state(card, controls)
     for c in controls:
         c['section'] = section(c)
         c['locked'] = control_lock(c, state['direct'])

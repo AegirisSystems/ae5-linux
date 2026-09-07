@@ -23,6 +23,8 @@ Created by **Kyle Monti / Aegiris Systems**, building on the Linux CA0132 driver
 
 ## What you get
 
+This branch also contains the **0.17 Direct DAC volume candidate and AegAudio 0.3.0**. It adds control of the previously fixed −23 dB attenuation. See the [DAC volume guide](docs/direct-dac-volume.md) for its controls, build steps and validation limits. The linked **0.16 preview2 download** and the bundle contents below remain the previously published release; they do not include the new DAC control.
+
 | Component | Included capability |
 | --- | --- |
 | Native CA0132 kernel module | AE-5 Direct stereo transport, clock and DAC path for the qualified hardware/kernel |

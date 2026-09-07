@@ -40,7 +40,7 @@ def main():
     config=dict(user=a.user,uid=account.pw_uid,home=account.pw_dir,pci=pci,
         vendor_id='0x11020011',subsystem_id='0x11020051',kernel=KERNEL,module_path=str(module),
         module_sha256=sha(module),native_srcversion=run(['modinfo','-F','srcversion',str(module)]),
-        stock_module=str(stock[0]),stock_module_sha256=sha(stock[0]),sink=sink,version='0.16',
+        stock_module=str(stock[0]),stock_module_sha256=sha(stock[0]),sink=sink,version='0.17',
         output_select=1,unmute_front_on_start=True)
     userunits=Path(account.pw_dir)/'.config/systemd/user'
     pipeweaver=userunits/'pipeweaver.service'
