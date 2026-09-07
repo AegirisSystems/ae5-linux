@@ -83,6 +83,30 @@ int ae5_dac_bridge_restore(const struct dac_io *io,struct dac_result *r)
 
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 #include "ae5_dac_volume.h"
+int ae5_volume_write_allowed(const struct ae5_volume_result *r,dac_u32 encoded,int stopped)
+{
+ unsigned int reg=encoded&255,data=encoded>>8,i;
+ if(!r || encoded>0xffff || !r->baseline_valid || !r->volume_pending) return 0;
+ if(r->live_active) {
+  if(!r->live_snapshot_valid) return 0;
+  if(reg==15 || reg==16) {
+   i=reg-15;
+   return data==r->live_before[2+i] || data==r->live_next[i];
+  }
+  return reg==7 && data==(r->live_before[1]|3);
+ }
+ if(!stopped) return 0;
+ if(reg==15 || reg==16) {
+  i=reg-15;
+  return data==r->before_regs[2+i] || data==r->desired[i];
+ }
+ if(reg==7) {
+  if(data==r->before_regs[1] || data==(r->before_regs[1]|3)) return 1;
+  return r->teardown_valid && (data==(r->teardown_regs[1]|3) ||
+         data==((r->teardown_regs[1]&~3U)|(r->before_regs[1]&3U)));
+ }
+ return 0;
+}
 /* This experiment only adds 6dB attenuation under soft mute, then restores.
  * It cannot change gain/master trim, select outputs or start playback. */
 static int volume_begin(const struct dac_io *io,struct ae5_volume_result *r)
@@ -213,10 +237,11 @@ out:
  * Hold applies attenuation while muted. Activate restores only the saved mute
  * bits, after the caller verifies route/clock setup. Quiet precedes route
  * teardown. Recover restores the saved DAC values after that teardown. */
-int ae5_volume_hold(const struct dac_io *io,struct ae5_volume_result *r,unsigned int steps)
+int ae5_volume_prepare(const struct dac_io *io,struct ae5_volume_result *r,
+                      const unsigned int steps[2],int explicit_level)
 {
  unsigned int i; dac_u32 expected[DAC_READ_COUNT]; int err,restore;
- if(!io || !io->transfer || !r || steps>180) return -EINVAL;
+ if(!io || !io->transfer || !r || !steps || steps[0]>255 || steps[1]>255) return -EINVAL;
  if(r->needs_restore) return -EBUSY;
  memset(r,0,sizeof(*r));
  err=read_bridge(io,r->bridge.before); if(err) goto out;
@@ -227,8 +252,8 @@ int ae5_volume_hold(const struct dac_io *io,struct ae5_volume_result *r,unsigned
  r->baseline_valid=1;
  memcpy(expected,r->before_regs,sizeof(expected)); expected[1]|=3;
  for(i=0;i<2;i++) {
-  /* Never raise the level relative to an existing DAC attenuation value. */
-  r->desired[i]=r->before_regs[2+i]>steps?r->before_regs[2+i]:steps;
+  /* Preserve the original startup policy until the owner selects a level. */
+  r->desired[i]=!explicit_level && r->before_regs[2+i]>steps[i] ? r->before_regs[2+i] : steps[i];
   expected[2+i]=r->desired[i];
  }
  r->volume_pending=1;
@@ -244,6 +269,89 @@ failed:
  restore=ae5_volume_recover(io,r); if(restore) err=restore;
 out:
  r->error=err; return err;
+}
+int ae5_volume_hold(const struct dac_io *io,struct ae5_volume_result *r,unsigned int steps)
+{
+ const unsigned int pair[2]={steps,steps};
+ if(steps>180) return -EINVAL;
+ return ae5_volume_prepare(io,r,pair,0);
+}
+
+/* Caller serializes against setup/cleanup and every stock bridge command.
+ * No clock, route, DMA, amplifier gain, or mute changes on the success path.
+ * Move at most 1 dB per channel per iteration. A failed write rolls both
+ * channels back; if that cannot be verified, attempt soft mute and leave
+ * the error latched for explicit recovery. Never claim rollback succeeded
+ * merely because a write returned success.
+ */
+int ae5_volume_set_live(const struct dac_io *io,struct ae5_volume_result *r,
+                        const unsigned int steps[2])
+{
+ dac_u32 expected[DAC_READ_COUNT],observed[DAC_READ_COUNT];
+ unsigned int i; int err,restore,rollback=0,writes=0;
+ if(!io || !io->transfer || !r || !steps || steps[0]>255 || steps[1]>255) return -EINVAL;
+ if(!r->baseline_valid || !r->volume_pending || !r->applied_verified || r->error ||
+    r->bridge.needs_restore || r->live_active) return -EBUSY;
+ r->live_active=1; r->live_snapshot_valid=0; r->live_verified=0;
+ r->live_error=0; r->live_rollback_error=0;
+ /* Refuse an unexpected bridge owner/configuration before any write. */
+ {
+  dac_u32 bridge[3];
+  err=read_bridge(io,bridge);
+  if(err) goto done;
+  if(bridge[0]!=r->bridge.before[0] || bridge[2]!=r->bridge.before[2] ||
+     ((bridge[1]^r->bridge.before[1])&~0x800000U)) { err=-EBUSY; goto done; }
+ }
+ err=volume_begin(io,r); if(err) goto finish;
+ err=volume_snapshot(io,r->live_before); if(err) goto finish;
+ if(r->live_before[2]!=r->desired[0] || r->live_before[3]!=r->desired[1]) {
+  err=-EIO; r->applied_verified=0; r->error=err; goto finish;
+ }
+ r->live_snapshot_valid=1;
+ memcpy(expected,r->live_before,sizeof(expected));
+ r->live_next[0]=expected[2]; r->live_next[1]=expected[3];
+ while(expected[2]!=steps[0] || expected[3]!=steps[1]) {
+  for(i=0;i<2;i++) {
+   unsigned int old=expected[2+i],next=steps[i];
+   if(next>old+2) next=old+2;
+   if(old>next+2) next=old-2;
+   r->live_next[i]=next;
+   if(next==old) continue;
+   writes=1;
+   err=volume_write(io,15+i,next); if(err) goto undo;
+   expected[2+i]=next;
+  }
+ }
+ err=volume_snapshot(io,observed); if(err) goto undo;
+ if(memcmp(expected,observed,sizeof(expected))) { err=-EIO; goto undo; }
+ restore=ae5_dac_bridge_restore(io,&r->bridge);
+ if(restore) { err=restore; goto undo; }
+ memcpy(r->applied_regs,observed,sizeof(observed));
+ r->desired[0]=steps[0]; r->desired[1]=steps[1];
+ r->live_verified=1; r->live_updates++; r->applied_verified=1;
+ goto done;
+undo:
+ if(writes) {
+  rollback=volume_begin(io,r);
+  if(!rollback) rollback=volume_write(io,15,r->live_before[2]);
+  if(!rollback) rollback=volume_write(io,16,r->live_before[3]);
+  if(!rollback) rollback=volume_snapshot(io,observed);
+  if(!rollback && memcmp(observed,r->live_before,sizeof(observed))) rollback=-EIO;
+  if(rollback) {
+   /* This is a failure containment attempt, not a proven mute. */
+   (void)volume_write(io,7,r->live_before[1]|3);
+   r->applied_verified=0; r->error=rollback;
+  } else {
+   memcpy(r->applied_regs,observed,sizeof(observed));
+  }
+ }
+finish:
+ restore=ae5_dac_bridge_restore(io,&r->bridge);
+ if(restore) { r->applied_verified=0; r->error=restore; if(!rollback) rollback=restore; }
+ if(!err) err=restore;
+done:
+ r->live_error=err; r->live_rollback_error=rollback; r->live_active=0;
+ return err;
 }
 static int volume_stream_mute(const struct dac_io *io,struct ae5_volume_result *r,int quiet)
 {

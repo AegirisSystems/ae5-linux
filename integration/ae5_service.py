@@ -2,6 +2,7 @@
 """Host-scoped AE-5 Direct service with explicit output and mixer preservation."""
 from pathlib import Path
 import argparse,fcntl,hashlib,json,os,re,shutil,signal,socket,subprocess,sys,time,urllib.request,urllib.error
+import dac_settings
 
 INSTALL=Path('/usr/lib/ae5-direct')
 RUNTIME=Path('/run/ae5-direct')
@@ -14,6 +15,23 @@ STOP=False
 
 def log(event,**data): print(json.dumps(dict(event=event,**data)),flush=True)
 def config(): return json.loads((INSTALL/'installation.json').read_text())
+
+def restore_dac_preference(card):
+    """Queue the panel's device-scoped volume before Direct playback opens."""
+    c=config()
+    expected=dict(pci=c['pci'],vendor=c['vendor_id'],subsystem=c['subsystem_id'])
+    try:
+        values=dac_settings.load(dac_settings.preference_path(c['home']),expected)
+    except (OSError,ValueError) as exc:
+        log('dac-preference-ignored',reason=str(exc));return
+    if values is None:return
+    before=command(['amixer','-c',str(card),'cget','name='+dac_settings.CONTROL],check=False)
+    if before['exit']:
+        log('dac-preference-ignored',reason='Loaded driver has no Direct DAC volume control');return
+    command(['amixer','-c',str(card),'cset','name='+dac_settings.CONTROL,','.join(values)])
+    actual=command(['amixer','-c',str(card),'cget','name='+dac_settings.CONTROL])['stdout']
+    if mixer_value(actual)!=','.join(values):raise RuntimeError('Saved DAC volume readback differs')
+    log('dac-preference-restored',values=values)
 def digest(path): return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 def command(args,timeout=12,check=True):
     p=subprocess.run(args,capture_output=True,text=True,timeout=timeout)
@@ -266,6 +284,7 @@ def activate():
     if mixer(card)!=s['original_mixer']: raise RuntimeError('Hardware controls changed during activation')
     s['direct_mixer']=prepare_output(card); save(s)
     native_command('check'); native_command('enable')
+    restore_dac_preference(card)
     s['phase']='enabled'; save(s)
     prepare_runtime(s); check_stop()
     ctl('start','--no-block',*UNITS); wait_units(True,35)

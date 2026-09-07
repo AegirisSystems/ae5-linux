@@ -36,6 +36,13 @@ async function api(path, body) {
   return data;
 }
 function find(name) { return DATA.controls.find(c => c.name === name); }
+const DAC_VOLUME='AE-5: Direct DAC Playback Volume';
+function editorValue(c,value) {
+  return c.name===DAC_VOLUME ? c.db_min+(Number(value)-c.min)*c.db_step : value;
+}
+function controlValue(c,value) {
+  return c.name===DAC_VOLUME ? String((Number(value)-c.db_min)/c.db_step+c.min) : value;
+}
 function valueLabel(c) {
   if (!c) return 'Unavailable';
   if (c.type === 'ENUMERATED') return c.values.map(v => c.items[Number(v)] ?? v).join(' / ');
@@ -46,6 +53,7 @@ function pretty(c) {
   return c.name.replace(/^AE-5: /,'').replace(/^FX: /,'').replace(/ Playback (Volume|Switch)$/,'').replace(/ Capture (Volume|Switch)$/,' capture').replace('Enable OutFX','Acoustic engine').replace('Enable InFX capture','Voice processing').replace('X-Bass','Bass').replace('Dialog Plus','Dialog+');
 }
 function level(c,v) {
+  if(c.name===DAC_VOLUME)return `${Number(editorValue(c,v)).toFixed(1)} dB`;
   const db = c.db_min === undefined ? '' : ` · ${(c.db_min+(Number(v)-c.min)*c.db_step).toFixed(1)} dB`;
   return `${v}${db}`;
 }
@@ -60,7 +68,8 @@ function control(c, {compact=false}={}) {
     if(c.type === 'ENUMERATED') return `<div class="channel"><span class="channel-label">${channel}</span><label class="sr-only" for="${id}">${esc(label)}</label><select id="${id}" data-i="${i}" ${disabled}>${c.items.map((item,n)=>`<option value="${n}" ${String(n)===v?'selected':''}>${esc(item)}</option>`).join('')}</select></div>`;
     if(c.type === 'INTEGER' && c.iface==='MIXER') {
       const outside=Number(v)<c.min||Number(v)>c.max;
-      return `<div class="channel"><span class="channel-label">${channel}</span><label class="sr-only" for="${id}">${esc(label)}</label><input id="${id}" type="range" min="${c.min}" max="${c.max}" step="${c.step||1}" value="${v}" data-i="${i}" ${disabled || (outside?'disabled':'')}><input type="number" aria-label="${esc(label)} value" min="${c.min}" max="${c.max}" step="${c.step||1}" value="${v}" data-number="${i}" ${disabled}><output class="readback" data-output="${i}">${esc(level(c,v))}</output></div>${outside?`<p class="hint">Driver readback ${esc(v)} is outside its advertised ${c.min}–${c.max} range. No correction is applied automatically.</p>`:''}`;
+      const lo=editorValue(c,c.min),hi=editorValue(c,c.max),shown=editorValue(c,v),step=c.name===DAC_VOLUME?c.db_step:(c.step||1);
+      return `<div class="channel"><span class="channel-label">${channel}</span><label class="sr-only" for="${id}">${esc(label)}</label><input id="${id}" type="range" min="${lo}" max="${hi}" step="${step}" value="${shown}" data-i="${i}" ${disabled || (outside?'disabled':'')}><input type="number" aria-label="${esc(label)} ${c.name===DAC_VOLUME?'dB':'value'}" min="${lo}" max="${hi}" step="${step}" value="${shown}" data-number="${i}" ${disabled}><output class="readback" data-output="${i}">${esc(level(c,v))}</output></div>${outside?`<p class="hint">Driver readback ${esc(v)} is outside its advertised ${c.min}–${c.max} range. No correction is applied automatically.</p>`:''}`;
     }
     return `<div class="readback">${esc(v)}</div>`;
   }).join('');
@@ -69,6 +78,12 @@ function control(c, {compact=false}={}) {
 function panel(heading,controls) {return `<section class="panel"><h2>${esc(heading)}</h2>${controls.length?controls.map(c=>control(c)).join(''):'<p class="muted">This driver does not expose a control for this section.</p>'}</section>`;}
 function heading(extra='') {return `<div class="page-heading"><div><h1>${titles[PAGE]}</h1><p>${intros[PAGE]}</p></div>${extra}</div>`;}
 function directNotice() {return DATA.state.direct?'<div class="notice">Direct playback is active. SBX and equalizer processing are bypassed. Stored effect settings are shown below; this panel leaves them unchanged while Direct playback is active.</div>':'';}
+function dacVolumePanel() {
+  const dac=find(DAC_VOLUME);
+  if(!dac)return '<section class="panel"><h2>Direct DAC volume</h2><p class="hint">The loaded driver does not expose adjustable DAC volume.</p></section>';
+  const status=find('AE-5: Direct DAC Status');
+  return `<section class="panel"><h2>Direct DAC volume</h2>${status?`<p class="readback">${esc(valueLabel(status))}</p>`:''}<p class="hint">${DATA.state.direct?'Adjust the output level during playback.':'Choose the level for the next Direct playback.'} Headphone amplifier gain stays separate. Levels are saved independently from effect profiles.</p>${control(dac)}</section>`;
+}
 function quality() {
   const active=Object.values(DATA.state.streams).find(s=>s.includes('format:') && s.includes('rate:'));
   const rate=active?.match(/rate:\s*(\d+)/)?.[1];
@@ -88,7 +103,7 @@ function dial(c,label,switchControl) {
 }
 function renderPlayback() {
   const q=quality(),output=find('Output Select'),filter=find('AE-5: Sound Filter');
-  return heading()+`<div class="command-tabs"><button class="selected" data-local-tab="analog">Speakers/Headphones</button><button data-local-tab="digital">Digital</button></div><div id="analog-view" class="command-playback"><div class="playback-device">Playback device: <strong>Sound Blaster AE-5</strong></div><div class="output-grid"><div><h2>Output</h2>${output?output.items.map((name,i)=>`<label class="output-option"><input type="radio" name="output" value="${i}" data-output-select="${output.numid}" ${Number(output.values[0])===i?'checked':''} ${output.locked?'disabled':''}><span class="output-symbol">${i?'♧':'▣'}</span><span>${i?'Headphones':'Speakers'}<small>${i?esc(valueLabel(find('AE-5: Headphone Gain'))):esc(valueLabel(find('Surround Channel Config')))}</small></span></label>`).join(''):''}</div><div class="output-diagram">${headphones()}<span>${esc(valueLabel(output))}</span></div></div><section class="direct-setting"><h2>Direct Mode</h2><button class="command-toggle ${DATA.state.direct?'enabled':''}" disabled aria-label="Direct mode is read only" role="switch" aria-checked="${DATA.state.direct}"><span></span></button> ${DATA.state.direct?'On':'Off'}<p class="hint">Current mode is read-only here. Driver service transitions are not enabled in this preview.</p></section><div class="two-col format-controls"><div><h2>Audio Quality</h2><select disabled aria-label="Active audio quality"><option>${esc(q.bits?`${q.bits} bit, ${q.rate}`:q.rate)}</option></select><p class="hint">Live PCM format · ${esc(q.format)}</p></div><div><h2>Filters</h2>${filter?`<select aria-label="DAC filter" data-select="${filter.numid}" ${filter.locked?'disabled':''}>${filter.items.map((name,i)=>`<option value="${i}" ${String(i)===filter.values[0]?'selected':''}>${esc(name)}</option>`).join('')}</select>`:''}</div></div><details class="advanced"><summary>Headphone / speaker configuration and channel controls</summary>${DATA.controls.filter(c=>c.section==='playback'&&c!==output&&c!==filter).map(c=>control(c)).join('')}${['Master Playback Volume','Master Playback Switch','Front Playback Volume','Front Playback Switch'].map(find).filter(Boolean).map(c=>control(c)).join('')}</details></div><div id="digital-view" hidden>${panel('Digital output',DATA.controls.filter(c=>c.name.startsWith('IEC958')))}</div>`;
+  return heading()+`<div class="command-tabs"><button class="selected" data-local-tab="analog">Speakers/Headphones</button><button data-local-tab="digital">Digital</button></div><div id="analog-view" class="command-playback"><div class="playback-device">Playback device: <strong>Sound Blaster AE-5</strong></div><div class="output-grid"><div><h2>Output</h2>${output?output.items.map((name,i)=>`<label class="output-option"><input type="radio" name="output" value="${i}" data-output-select="${output.numid}" ${Number(output.values[0])===i?'checked':''} ${output.locked?'disabled':''}><span class="output-symbol">${i?'♧':'▣'}</span><span>${i?'Headphones':'Speakers'}<small>${i?esc(valueLabel(find('AE-5: Headphone Gain'))):esc(valueLabel(find('Surround Channel Config')))}</small></span></label>`).join(''):''}</div><div class="output-diagram">${headphones()}<span>${esc(valueLabel(output))}</span></div></div><section class="direct-setting"><h2>Direct Mode</h2><button class="command-toggle ${DATA.state.direct?'enabled':''}" disabled aria-label="Direct mode is read only" role="switch" aria-checked="${DATA.state.direct}"><span></span></button> ${DATA.state.direct?'On':'Off'}<p class="hint">Current mode is read-only here. Driver service transitions are not enabled in this preview.</p></section>${dacVolumePanel()}<div class="two-col format-controls"><div><h2>Audio Quality</h2><select disabled aria-label="Active audio quality"><option>${esc(q.bits?`${q.bits} bit, ${q.rate}`:q.rate)}</option></select><p class="hint">Live PCM format · ${esc(q.format)}</p></div><div><h2>Filters</h2>${filter?`<select aria-label="DAC filter" data-select="${filter.numid}" ${filter.locked?'disabled':''}>${filter.items.map((name,i)=>`<option value="${i}" ${String(i)===filter.values[0]?'selected':''}>${esc(name)}</option>`).join('')}</select>`:''}</div></div><details class="advanced"><summary>Headphone / speaker configuration and channel controls</summary>${DATA.controls.filter(c=>c.section==='playback'&&c!==output&&c!==filter&&c.name!==DAC_VOLUME&&c.writable).map(c=>control(c)).join('')}${['Master Playback Volume','Master Playback Switch','Front Playback Volume','Front Playback Switch'].map(find).filter(Boolean).map(c=>control(c)).join('')}</details></div><div id="digital-view" hidden>${panel('Digital output',DATA.controls.filter(c=>c.name.startsWith('IEC958')))}</div>`;
 }
 function renderSbx() {
   const effects=[['Surround','Surround'],['Crystalizer','Crystalizer'],['X-Bass','Bass'],['Smart Volume','Smart Vol'],['Dialog Plus','Dialog+']];
@@ -112,7 +127,7 @@ function renderMixer() {
   return heading('<label class="sr-only" for="search">Find a mixer control</label><input class="search" type="text" id="search" placeholder="Find a control…">')+panel('Playback and digital output',DATA.controls.filter(c=>c.section==='mixer'))+'<p class="hint">Changes apply when you release a slider, choose an option, or finish entering a number. L and R remain independent. Settings sync automatically with the AE-5.</p>';
 }
 function renderProfiles() {
-  return heading()+`<section class="panel"><h2>Save the current AE-5 settings</h2><p class="muted">Export a JSON profile to this computer. Headphone gain, output selection, and speaker topology are excluded. Exporting does not change your sound.</p><div class="actions"><button id="export" class="primary">Export current profile</button><button id="import">Import and review…</button></div></section><section class="panel"><h2>Profile review</h2><div id="profile-review" class="muted">Choose a profile to see its exact changes before applying it.</div></section>`;
+  return heading()+`<section class="panel"><h2>Save the current AE-5 settings</h2><p class="muted">Export a JSON profile to this computer. DAC volume, headphone gain, output selection, and speaker topology are excluded. Exporting does not change your sound.</p><div class="actions"><button id="export" class="primary">Export current profile</button><button id="import">Import and review…</button></div></section><section class="panel"><h2>Profile review</h2><div id="profile-review" class="muted">Choose a profile to see its exact changes before applying it.</div></section>`;
 }
 function renderHistory() {
   return heading()+`<section class="panel"><h2>Record what you hear</h2><form id="note-form" class="note-grid"><label for="observation">Result</label><select id="observation"><option>Heard as expected</option><option>No audible change</option><option>Silent</option><option>Distorted</option><option>Other</option></select><label for="note">What did you change, and what happened?</label><textarea id="note" rows="3" maxlength="4000" required placeholder="For example: changed the DAC filter, music continued without interruption."></textarea><div><button class="primary" type="submit">Save observation</button></div></form></section><section class="panel"><h2>Recent activity</h2><p class="hint">Control entries confirm ALSA readback. Only your listening notes report what you heard.</p><div id="history-items">Loading history…</div><div class="actions"><button id="export-history">Export recent history</button></div></section>`;
@@ -255,12 +270,12 @@ function bind() {
   document.querySelectorAll('[data-control]').forEach(form=>{
     const c=DATA.controls.find(c=>c.numid===Number(form.dataset.control));
     const button=form.querySelector('button[type=submit]');
-    const values=()=>c.values.map((v,i)=>c.type==='BOOLEAN'?(form.querySelector(`[data-i="${i}"]`).checked?'on':'off'):c.type==='INTEGER'?form.querySelector(`[data-number="${i}"]`).value:form.querySelector(`[data-i="${i}"]`).value);
+    const values=()=>c.values.map((v,i)=>c.type==='BOOLEAN'?(form.querySelector(`[data-i="${i}"]`).checked?'on':'off'):c.type==='INTEGER'?controlValue(c,form.querySelector(`[data-number="${i}"]`).value):form.querySelector(`[data-i="${i}"]`).value);
     form.addEventListener('input',event=>{
       if(!button)return;
       const i=event.target.dataset.i??event.target.dataset.number;
       if(c.type==='INTEGER'&&i!==undefined){
-        const value=event.target.value;form.querySelector(`[data-i="${i}"]`).value=value;form.querySelector(`[data-number="${i}"]`).value=value;form.querySelector(`[data-output="${i}"]`).textContent=level(c,value);
+        const value=event.target.value;form.querySelector(`[data-i="${i}"]`).value=value;form.querySelector(`[data-number="${i}"]`).value=value;form.querySelector(`[data-output="${i}"]`).textContent=level(c,controlValue(c,value));
       }
       button.disabled=JSON.stringify(values())===JSON.stringify(c.values);
       form.dataset.dirty=String(!button.disabled);

@@ -1129,6 +1129,8 @@ struct ca0132_spec {
 	/* AE-5 Control values */
 	unsigned char ae5_headphone_gain_val;
 	unsigned char ae5_filter_val;
+	unsigned int ae5_direct_volume[2];
+	bool ae5_direct_volume_selected;
 	/* ZxR Control Values */
 	unsigned char zxr_gain_set;
 
@@ -3647,12 +3649,15 @@ static void ca0113_mmio_gpio_set(struct hda_codec *codec, unsigned int gpio_pin,
  * seem to work with three distinct values that I've taken to calling group,
  * target-id, and value.
  */
+/* Serialize complete bridge transactions, including the Direct DAC control. */
+static DEFINE_MUTEX(ca0132_mmio_mutex);
 static void ca0113_mmio_command_set(struct hda_codec *codec, unsigned int group,
 		unsigned int target, unsigned int value)
 {
 	struct ca0132_spec *spec = codec->spec;
 	unsigned int write_val;
 
+	guard(mutex)(&ca0132_mmio_mutex);
 	writel(0x0000007e, spec->mem_base + 0x210);
 	readl(spec->mem_base + 0x210);
 	writel(0x0000005a, spec->mem_base + 0x210);
@@ -3692,6 +3697,7 @@ static void ca0113_mmio_command_set_type2(struct hda_codec *codec,
 	struct ca0132_spec *spec = codec->spec;
 	unsigned int write_val;
 
+	guard(mutex)(&ca0132_mmio_mutex);
 	writel(0x0000007e, spec->mem_base + 0x210);
 	readl(spec->mem_base + 0x210);
 	writel(0x0000005a, spec->mem_base + 0x210);
@@ -10035,14 +10041,16 @@ static int ca0132_codec_probe(struct hda_codec *codec,
 	return err;
 }
 
+static int ae5_add_volume_controls(struct hda_codec *codec);
 static int ca0132_codec_build_controls(struct hda_codec *codec)
 {
 	struct ca0132_spec *spec = codec->spec;
+	int err;
 
 	if (ca0132_quirk(spec) == QUIRK_ZXR_DBPRO)
 		return dbpro_build_controls(codec);
-	else
-		return ca0132_build_controls(codec);
+	err = ca0132_build_controls(codec);
+	return err < 0 ? err : ae5_add_volume_controls(codec);
 }
 
 static int ca0132_codec_build_pcms(struct hda_codec *codec)
@@ -10094,7 +10102,7 @@ MODULE_DEVICE_TABLE(hdaudio, snd_hda_id_ca0132);
 
 MODULE_LICENSE("GPL");
 MODULE_DESCRIPTION("Creative Sound Core3D codec with managed AE-5 Direct 384 kHz PCM");
-MODULE_VERSION("0.15");
+MODULE_VERSION("0.17-preview");
 
 /* Native extension uses the complete ca0132_spec and codec implementation. */
 #include "ae5_native.c"

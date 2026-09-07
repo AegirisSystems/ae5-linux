@@ -23,6 +23,7 @@
 #include <sound/core.h>
 #include <sound/pcm.h>
 #include <sound/pcm_params.h>
+#include <sound/tlv.h>
 #include <sound/hda_codec.h>
 #include "ae5_chipio.h"
 #include "ae5_direct_route_cycle.h"
@@ -408,18 +409,8 @@ static int dac_hardware(void *context,enum dac_operation op,dac_u32 offset,dac_u
   if (readl(mmio+0x804)!=0x48) break;
   if ((readl(mmio+0x20c)&7)==3) {
    for (i=0;i<DAC_READ_COUNT;i++) if (*value==ae5_dac_read_registers[i]) allowed=true;
-  } else if (reserved_dma_stopped() && (readl(mmio+0x20c)&7)==5 && *value<=0xffff && volume.baseline_valid && volume.volume_pending) {
-   unsigned int reg=*value&255, data=*value>>8;
-   if (reg==7) {
-    allowed=data==volume.before_regs[1] || data==(volume.before_regs[1]|3);
-    if(volume.teardown_valid)
-     allowed=allowed || data==(volume.teardown_regs[1]|3) ||
-       data==((volume.teardown_regs[1]&~3U)|(volume.before_regs[1]&3U));
-   }
-   if (reg==15 || reg==16) {
-    i=reg-15;
-    allowed=data==volume.before_regs[2+i] || data==volume.desired[i];
-   }
+  } else if ((readl(mmio+0x20c)&7)==5) {
+   allowed=ae5_volume_write_allowed(&volume,*value,reserved_dma_stopped());
   }
   break;
  case 0x208:
@@ -570,7 +561,9 @@ static int direct_cleanup(struct hda_pcm_stream *hinfo, struct hda_codec *codec,
  int err;
  down_write(&held_codec->card->controls_rwsem);
  mutex_lock(&state_mutex); mutex_lock(&held_spec->chipio_mutex);
+ mutex_lock(&ca0132_mmio_mutex);
  err=restore_path(); cleanup_error=err;
+ mutex_unlock(&ca0132_mmio_mutex);
  mutex_unlock(&held_spec->chipio_mutex); mutex_unlock(&state_mutex);
  up_write(&held_codec->card->controls_rwsem); return err;
 }
@@ -581,8 +574,10 @@ static int direct_prepare(struct hda_pcm_stream *hinfo, struct hda_codec *codec,
  struct ae5_path_io pio=path_io(); struct dac_io dio={dac_hardware,NULL};
  struct ae5_transport_snapshot *target;
  unsigned int rate=substream->runtime->rate; int err,repair;
+ unsigned int steps[2];
  down_write(&held_codec->card->controls_rwsem);
  mutex_lock(&state_mutex); mutex_lock(&held_spec->chipio_mutex);
+ mutex_lock(&ca0132_mmio_mutex);
  prepares++; WRITE_ONCE(stream_ready,false);
  err=restore_path(); if(err) goto out;
  if(!enabled || (wuh_opened && !wuh_running()) || !reserved_dma_stopped() || tag<1 || tag>15 ||
@@ -590,9 +585,11 @@ static int direct_prepare(struct hda_pcm_stream *hinfo, struct hda_codec *codec,
     format!=(rate==96000?0x841:rate==192000?0x1841:0x1843)) { err=-EINVAL; goto out; }
  reserved_tag=tag; logical_rate=rate; wire_format=format;
  rio=route_io(); path_result=(struct ae5_path_result){0}; outcome=(struct ae5_transport_cycle_result){0};
- /* Preserve the deployment's -23dB hardware attenuation while software
-  * volume remains in PipeWeaver. This never changes the gain/master trim. */
- err=ae5_volume_hold(&dio,&volume,46);
+ /* First activation retains the deployment's conservative -23 dB policy.
+  * Explicit ALSA selections survive stream reopen without touching gain. */
+ steps[0]=255-held_spec->ae5_direct_volume[0];
+ steps[1]=255-held_spec->ae5_direct_volume[1];
+ err=ae5_volume_prepare(&dio,&volume,steps,held_spec->ae5_direct_volume_selected);
  needs_restore=volume.needs_restore;
  if(err) goto out;
  err=ae5_direct_route_activate(&rio,rate,&outcome);
@@ -607,10 +604,15 @@ static int direct_prepare(struct hda_pcm_stream *hinfo, struct hda_codec *codec,
   goto out;
  }
  err=ae5_volume_activate(&dio,&volume);
- if(!err) WRITE_ONCE(stream_ready,true);
+ if(!err) {
+  held_spec->ae5_direct_volume[0]=255-volume.desired[0];
+  held_spec->ae5_direct_volume[1]=255-volume.desired[1];
+  WRITE_ONCE(stream_ready,true);
+ }
 out:
  if(err && needs_restore) { repair=restore_path(); if(repair) err=repair; }
  prepare_error=err;
+ mutex_unlock(&ca0132_mmio_mutex);
  mutex_unlock(&held_spec->chipio_mutex); mutex_unlock(&state_mutex);
  up_write(&held_codec->card->controls_rwsem); return err;
 }
@@ -773,6 +775,7 @@ static int run_command(const char *value)
 	down_write(&held_codec->card->controls_rwsem);
 	mutex_lock(&state_mutex);
 	mutex_lock(&held_spec->chipio_mutex);
+	mutex_lock(&ca0132_mmio_mutex);
 	if (repair) {
 		if (!enabled || !needs_restore || reserved_stream || recovery_attempts>=2) err=-EPERM;
 		else {
@@ -791,6 +794,7 @@ static int run_command(const char *value)
 		if (!err && sysfs_streq(value,"enable")) err=enable_pcm();
 		if (!err && sysfs_streq(value,"disable")) err=disable_pcm();
 	}
+	mutex_unlock(&ca0132_mmio_mutex);
 	mutex_unlock(&held_spec->chipio_mutex);
 	mutex_unlock(&state_mutex);
 	up_write(&held_codec->card->controls_rwsem);
@@ -849,7 +853,8 @@ static int status_get(char *buffer,const struct kernel_param *kp)
  for(i=0;i<DAC_READ_COUNT;i++) offset+=sysfs_emit_at(buffer,offset,"%s%u",i?",":"",volume.applied_regs[i]);
  offset+=sysfs_emit_at(buffer,offset,"],\"after\":[");
  for(i=0;i<DAC_READ_COUNT;i++) offset+=sysfs_emit_at(buffer,offset,"%s%u",i?",":"",volume.after_regs[i]);
- offset+=sysfs_emit_at(buffer,offset,"],\"cached\":true}");
+ offset+=sysfs_emit_at(buffer,offset,"],\"cached\":true,\"live_updates\":%u,\"live_error\":%d,\"live_rollback_error\":%d}",
+  volume.live_updates,volume.live_error,volume.live_rollback_error);
  offset+=sysfs_emit_at(buffer,offset,",\"baseline\":{\"format\":%u,\"converter\":%u,\"references\":%u,\"raw_count\":%u,\"raw_complete\":%u,\"route_count\":%u,\"route_error\":%d,\"peer_error\":%d,\"peers\":[",
         outcome.before.format,outcome.before.converter,outcome.before.references,
         outcome.before.raw.count,outcome.before.raw.complete,outcome.before.route.count,
@@ -938,3 +943,126 @@ static void ae5_detach(void)
     wuh_pcm=NULL; wuh_substream=NULL; wuh_info=NULL;
 }
 
+/* ALSA holds the card's control read lock around these callbacks. Never
+ * acquire controls_rwsem for writing here. State -> ChipIO -> MMIO is the
+ * same order used by the PCM preparation and recovery paths.
+ */
+static int ae5_dac_volume_info(struct snd_kcontrol *control,
+                              struct snd_ctl_elem_info *info)
+{
+ info->type=SNDRV_CTL_ELEM_TYPE_INTEGER;
+ info->count=2;
+ info->value.integer.min=0;
+ info->value.integer.max=255;
+ info->value.integer.step=1;
+ return 0;
+}
+static int ae5_dac_volume_get(struct snd_kcontrol *control,
+                             struct snd_ctl_elem_value *value)
+{
+ struct hda_codec *codec=snd_kcontrol_chip(control);
+ struct ca0132_spec *spec=codec->spec;
+ mutex_lock(&state_mutex);
+ value->value.integer.value[0]=spec->ae5_direct_volume[0];
+ value->value.integer.value[1]=spec->ae5_direct_volume[1];
+ mutex_unlock(&state_mutex);
+ return 0;
+}
+static int ae5_dac_volume_put(struct snd_kcontrol *control,
+                             struct snd_ctl_elem_value *value)
+{
+ struct hda_codec *codec=snd_kcontrol_chip(control);
+ struct ca0132_spec *spec=codec->spec;
+ struct dac_io io={dac_hardware,NULL};
+ unsigned int steps[2];
+ long left=value->value.integer.value[0],right=value->value.integer.value[1];
+ int err=0,changed;
+ if(left<0 || left>255 || right<0 || right>255) return -EINVAL;
+ mutex_lock(&state_mutex);
+ changed=spec->ae5_direct_volume[0]!=left || spec->ae5_direct_volume[1]!=right ||
+         !spec->ae5_direct_volume_selected;
+ if(ready && held_codec==codec) {
+  if(enabled && stream_ready && volume.volume_pending) {
+   if(volume.error || !volume.applied_verified) { err=-EIO; goto out; }
+   if(changed) {
+    steps[0]=255-left; steps[1]=255-right;
+    mutex_lock(&spec->chipio_mutex);
+    mutex_lock(&ca0132_mmio_mutex);
+    err=ae5_volume_set_live(&io,&volume,steps);
+    mutex_unlock(&ca0132_mmio_mutex);
+    mutex_unlock(&spec->chipio_mutex);
+    if(err) {
+     if(volume.error) WRITE_ONCE(stream_ready,false);
+     goto out;
+    }
+   }
+  } else if(needs_restore || reserved_stream) { err=-EBUSY; goto out; }
+ }
+ /* When Direct is inactive, save only. Never alter the ordinary DSP path. */
+ spec->ae5_direct_volume[0]=left; spec->ae5_direct_volume[1]=right;
+ spec->ae5_direct_volume_selected=true;
+out:
+ mutex_unlock(&state_mutex);
+ return err ? err : changed;
+}
+static int ae5_direct_active_get(struct snd_kcontrol *control,
+                                struct snd_ctl_elem_value *value)
+{
+ mutex_lock(&state_mutex);
+ value->value.integer.value[0]=ready && enabled && held_codec==snd_kcontrol_chip(control);
+ mutex_unlock(&state_mutex);
+ return 0;
+}
+static int ae5_dac_status_info(struct snd_kcontrol *control,struct snd_ctl_elem_info *info)
+{
+ static const char * const names[]={"Queued","Applied","Unknown after error"};
+ return snd_ctl_enum_info(info,1,ARRAY_SIZE(names),names);
+}
+static int ae5_dac_status_get(struct snd_kcontrol *control,struct snd_ctl_elem_value *value)
+{
+ unsigned int status=0;
+ mutex_lock(&state_mutex);
+ if(ready && held_codec==snd_kcontrol_chip(control) && enabled) {
+  if(volume.error || (volume.volume_pending && !volume.applied_verified)) status=2;
+  else if(stream_ready && volume.applied_verified) status=1;
+ }
+ value->value.enumerated.item[0]=status;
+ mutex_unlock(&state_mutex);
+ return 0;
+}
+static const DECLARE_TLV_DB_SCALE(ae5_dac_volume_db,-12750,50,0);
+static int ae5_add_volume_controls(struct hda_codec *codec)
+{
+ struct ca0132_spec *spec=codec->spec;
+ static const struct snd_kcontrol_new controls[]={
+  {
+   .iface=SNDRV_CTL_ELEM_IFACE_MIXER,
+   .name="AE-5: Direct DAC Playback Volume",
+   .access=SNDRV_CTL_ELEM_ACCESS_READWRITE | SNDRV_CTL_ELEM_ACCESS_TLV_READ |
+           SNDRV_CTL_ELEM_ACCESS_VOLATILE,
+   .info=ae5_dac_volume_info,.get=ae5_dac_volume_get,.put=ae5_dac_volume_put,
+   .tlv.p=ae5_dac_volume_db,
+  },
+  {
+   .iface=SNDRV_CTL_ELEM_IFACE_MIXER,
+   .name="AE-5: Direct Active",
+   .access=SNDRV_CTL_ELEM_ACCESS_READ | SNDRV_CTL_ELEM_ACCESS_VOLATILE,
+   .info=snd_ctl_boolean_mono_info,.get=ae5_direct_active_get,
+  },
+  {
+   .iface=SNDRV_CTL_ELEM_IFACE_MIXER,
+   .name="AE-5: Direct DAC Status",
+   .access=SNDRV_CTL_ELEM_ACCESS_READ | SNDRV_CTL_ELEM_ACCESS_VOLATILE,
+   .info=ae5_dac_status_info,.get=ae5_dac_status_get,
+  },
+ };
+ unsigned int i; int err;
+ if(codec->core.vendor_id!=0x11020011 || codec->core.subsystem_id!=0x11020051) return 0;
+ spec->ae5_direct_volume[0]=spec->ae5_direct_volume[1]=209; /* -23 dB */
+ spec->ae5_direct_volume_selected=false;
+ for(i=0;i<ARRAY_SIZE(controls);i++) {
+  err=snd_ctl_add(codec->card,snd_ctl_new1(&controls[i],codec));
+  if(err<0) return err;
+ }
+ return 0;
+}

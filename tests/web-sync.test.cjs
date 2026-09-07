@@ -25,6 +25,17 @@ function setup(){
   return {context,calls,run:code=>vm.runInContext(code,context)};
 }
 (async()=>{
+  const v=setup();
+  v.run("globalThis.dac={name:DAC_VOLUME,numid:76,iface:'MIXER',type:'INTEGER',count:2,values:['209','209'],min:0,max:255,db_min:-127.5,db_step:0.5};DATA.controls=[dac];DATA.state.direct=true;");
+  assert.equal(v.run("editorValue(dac,'209')"),-23);
+  assert.equal(v.run("controlValue(dac,'-20.5')"),'214');
+  assert.equal(v.run("controlValue(dac,'0')"),'255');
+  assert.equal(v.run("level(dac,'209')"),'-23.0 dB');
+  assert(v.run('dacVolumePanel()').includes('value="-23"'));
+  assert(v.run('dacVolumePanel()').includes('step="0.5"'));
+  assert(v.run('dacVolumePanel()').includes('during playback'));
+  v.run('DATA.controls=[]');
+  assert(v.run('dacVolumePanel()').includes('does not expose'));
   let t=setup();await t.run('refresh({background:true})');
   assert(t.calls.includes('render'),'External control change should update the page');
   assert.equal(t.run('DATA.controls[0].values[0]'),'30');
