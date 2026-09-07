@@ -12,7 +12,9 @@ Out of scope: automatic changes to an existing working audio system, unrelated c
 
 This is an **experimental, exact-kernel release**, not a universal Linux driver. Supported build target: Ubuntu kernel **7.0.0-31-generic**, x86-64. The recovered device has codec vendor `11020011` and subsystem `11020051`. Other AE-series cards and AE-5 Plus subsystem variants are not qualified by this release.
 
-The original 0.15 driver was reported audible at 384 kHz/S32_LE on one system. The packaged integration changes and new UI have not been exercised against hardware. Reboot, suspend and upgrade behavior remain untested. Installation never starts Direct mode automatically.
+The original 0.15 driver was reported audible at 384 kHz/S32_LE on one system. The redistributed driver integration has not completed fresh-installation/playback qualification. The browser UI has since been deployed with read-only verification; full manual control testing, reboot, suspend and upgrade behavior remain untested. Installation never starts Direct mode automatically.
+
+**For the complete preview2 download and installation sequence, use the [README installation guide](../README.md#installation).** It includes the single-download bundle, panel-only setup, backup commands, firmware, signing, activation and rollback. The source-build details below also apply. Preview2 reuses preview1's exact driver binary and adds AegAudio 0.2.0 with the browser panel.
 
 ## 1. Keep a rollback copy
 

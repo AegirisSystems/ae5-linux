@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Independent browser controls for the Sound Blaster AE-5 on Linux.">
+  <title>Sound Blaster Command for Linux · AE-5 · AegAudio</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/style.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+<a class="skip" href="#content">Skip to controls</a>
+<div class="shell">
+  <header class="window-title"><div>Sound Blaster Command <small>Linux interface by AegAudio</small></div><strong>AE-5</strong></header>
+  <aside class="sidebar">
+    <div class="device"><span>Sound Experience</span><span id="connection">Connecting to AE-5…</span></div>
+    <nav aria-label="Audio settings">
+      <button data-page="sbx" class="active"><span aria-hidden="true">⌂</span>SBX Profile</button>
+      <button data-page="equalizer"><span aria-hidden="true">♮</span>Equalizer</button>
+      <div class="nav-divider"></div>
+      <button data-page="playback"><span aria-hidden="true">◖</span>Playback</button>
+      <button data-page="recording"><span aria-hidden="true">♩</span>Recording</button>
+      <button data-page="features"><span aria-hidden="true">⊕</span>Scout Mode <small>Unavailable</small></button>
+      <button data-page="features"><span aria-hidden="true">▧</span>Encoder <small>Unavailable</small></button>
+      <button data-page="mixer"><span aria-hidden="true">☷</span>Mixer</button>
+      <div class="nav-divider"></div>
+      <button data-page="profiles"><span aria-hidden="true">▣</span>My Profiles</button>
+      <button data-page="history"><span aria-hidden="true">◷</span>Listening History</button>
+      <button data-page="status"><span aria-hidden="true">⚙</span>Device Settings</button>
+    </nav>
+    <div class="sidebar-foot">AE-5 only<br>Independent Linux preview</div>
+  </aside>
+  <main id="content" tabindex="-1">
+    <header class="topbar"><div><span class="eyebrow">DEVICE CONTROL</span><span id="mode" class="mode">Reading playback state</span></div><button id="refresh">Refresh settings <span aria-hidden="true">↻</span></button></header>
+    <div id="message" role="status" aria-live="polite" hidden></div>
+    <div id="mute-warning" class="notice danger" hidden></div>
+    <div id="page"><div class="loading">Reading AE-5 controls…</div></div>
+  </main>
+  <footer class="statusbar"><span id="output-status">Output —</span><strong id="footer-engine">SBX</strong><span id="front-status">Front —</span><span id="format-status">Format —</span><span id="updated">Not read yet</span><div id="footer-volume"></div></footer>
+</div>
+<dialog id="confirm"><form method="dialog"><h2 id="confirm-title"></h2><p id="confirm-text"></p><pre id="confirm-detail"></pre><div class="actions"><button value="cancel">Cancel</button><button value="apply" class="primary">Apply change</button></div></form></dialog>
+<input type="file" id="profile-file" accept="application/json,.json" hidden>
+</body></html>

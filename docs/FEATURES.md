@@ -20,7 +20,7 @@ The [official Sound Blaster Command guide](https://download.creative.com/manuald
 | Speakers/headphones | Output Select and auto-detect controls | Explicit confirmation; disabled during active Direct PCM |
 | Headphone impedance preset | AE-5 Headphone Gain enumeration | Never auto-selected, excluded from profiles; disabled during Direct PCM |
 | DAC reconstruction filter | AE-5 Sound Filter enumeration | Uses the driver's own advertised values |
-| Direct 384 kHz / 32-bit PCM | Preserved native driver; explicit service start/stop in UI | One exact kernel/subsystem, existing PipeWeaver integration, untested new packaging |
+| Direct 384 kHz / 32-bit PCM | Preserved native driver; explicit service start/stop in native Qt UI; read-only status in browser | One exact kernel/subsystem, existing PipeWeaver integration, untested new packaging |
 | SBX acoustic effects | Surround, Crystalizer, X-Bass/crossover, Dialog Plus, Smart Volume/settings, OutFX | DSP mode only; no copied vendor preset library |
 | Equalizer | Ten ALSA band controls, draggable setting curve, driver preset enumeration, dB readout | Band indices follow Linux; curve is not a measured filter response |
 | Input selection and levels | Input Source, capture controls, Mic Boost, What U Hear | Capture device capabilities remain those of the installed driver |
