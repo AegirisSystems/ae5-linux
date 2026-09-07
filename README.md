@@ -15,11 +15,11 @@ Out of scope: automatic changes to working systems, other cards, private configu
 
 **384 kHz / 32-bit stereo Direct playback, with an independent Linux control panel inspired by Sound Blaster Command.**
 
-Created by **Kyle Monti / Aegiris Systems**, building on the Linux CA0132 driver and its upstream contributors. This project packages the native Direct-path work recovered on Kyle's Sound BlasterX AE-5, plus AegAudio's browser and native desktop interfaces.
+Created by **Kyle Monti / Aegiris Systems**, building on the Linux CA0132 driver and its upstream contributors. We built this project to bring the native Direct path to our Sound BlasterX AE-5 on Linux, with AegAudio's browser and native desktop interfaces.
 
-[Download the complete bundle](https://github.com/AegirisSystems/ae5-linux/releases/download/v0.16.0-preview2/ae5-linux-v0.16.0-preview2-bundle.tar.gz) · [Release and checksums](https://github.com/AegirisSystems/ae5-linux/releases/tag/v0.16.0-preview2) · [Installation](#installation) · [The 96 kHz ceiling](#why-96-khz-was-the-ceiling) · [Kyle's recovery](#what-kyle-did-to-recover-the-audio)
+[Download the complete bundle](https://github.com/AegirisSystems/ae5-linux/releases/download/v0.16.0-preview2/ae5-linux-v0.16.0-preview2-bundle.tar.gz) · [Release and checksums](https://github.com/AegirisSystems/ae5-linux/releases/tag/v0.16.0-preview2) · [Installation](#installation) · [The 96 kHz ceiling](#why-96-khz-was-the-ceiling) · [What we did](#what-we-did-to-recover-the-audio)
 
-> **Experimental preview, with one recovered hardware system.** Kyle reported audible Direct playback at 384000 Hz / S32_LE. The browser panel has been deployed and its reads and automatic refresh verified. The redistributed driver/integration package has been compiled and inspected, but has not completed a clean installation, reboot, suspend or playback qualification on another machine. This is not a universal Linux installer or a claim of complete Windows feature parity.
+> **Experimental preview, with one recovered hardware system.** We recovered audible Direct playback at 384000 Hz / S32_LE on our system. The browser panel has been deployed and its reads and automatic refresh verified. The redistributed driver/integration package has been compiled and inspected, but has not completed a clean installation, reboot, suspend or playback qualification on another machine. This is not a universal Linux installer or a claim of complete Windows feature parity.
 
 ## What you get
 
@@ -70,15 +70,15 @@ The relevant source is public:
 
 The service selects 384 kHz; the additional driver rates are not a tested user-selectable mode matrix. Windows drivers are not executed on Linux, and this package contains no Creative Windows binaries.
 
-## What Kyle did to recover the audio
+## What we did to recover the audio
 
-Kyle initiated the investigation because the same AE-5 and headphones no longer sounded or behaved as they had under Windows. He supplied the Windows installer for interoperability analysis, insisted that the actual hardware path be traced, and directed the clean-configuration diagnosis when repeated routing changes failed.
+We started investigating because the same AE-5 and headphones no longer sounded or behaved as they had under Windows. We inspected the Windows installer for interoperability information, traced the actual hardware path, and worked through a clean-configuration diagnosis when repeated routing changes failed.
 
-**Kyle found the final cause of total silence himself: `Front Playback Switch` was off.** The Direct stream was already reporting 384 kHz, DMA was running, and the pins were enabled. DAC node `0x02` still reported amp byte `0xc3`: mute bit `0x80` set over level `0x43`. Clearing that mute restored the missing output. A healthy software graph had not proved that the physical output was audible.
+**We found the final cause of total silence: `Front Playback Switch` was off.** The Direct stream was already reporting 384 kHz, DMA was running, and the pins were enabled. DAC node `0x02` still reported amp byte `0xc3`: mute bit `0x80` set over level `0x43`. Clearing that mute restored the missing output. A healthy software graph had not proved that the physical output was audible.
 
-That was a separate problem from the 96 kHz ceiling. The driver work supplied the high-rate path; Kyle's mute discovery recovered sound from that path. It would be inaccurate to say that unmuting alone unlocked 384 kHz, or that a 384 kHz status line alone proved the recovery.
+That was a separate problem from the 96 kHz ceiling. Our driver work supplied the high-rate path; finding and clearing the mute recovered sound from that path. Unmuting alone did not unlock 384 kHz, and a 384 kHz status line alone did not prove the recovery.
 
-The resulting package checks the actual Front DAC mute bits during activation/restoration, explicitly handles Front playback, and preserves the user's existing gain and levels. The recovered setup also needed a missing PipeWeaver user service and persistent user routing files rather than routing that lived only under `/run`. The configurator supplies the missing unit where needed; each user must configure their own routes. Kyle's private mixer state, account identifiers and full machine snapshot are not shipped.
+Our resulting package checks the actual Front DAC mute bits during activation/restoration, explicitly handles Front playback, and preserves the user's existing gain and levels. We also added a missing PipeWeaver user service and made our user routing files persistent instead of keeping them only under `/run`. The configurator supplies the missing unit where needed; each user must configure their own routes. Our private mixer state, account identifiers and full machine snapshot are not shipped.
 
 ## Compatibility and limits
 
@@ -260,7 +260,7 @@ Inspect the preview before running `--apply`. It identifies the AE-5 by codec/su
 
 When an interruption is acceptable, reboot into the matching kernel to load the installed module. Keep the headphones off your ears through initialization and check the restored output/volume before listening. A sample-rate change does not change headphone impedance; initialization can still change mute or level state.
 
-Set up ordinary AE-5 playback in PipeWeaver. Its **System** source, internally `pipeweaver_system`, must reach the **Headphones** target attached to the AE-5. The local PipeWeaver API must answer at `127.0.0.1:14565`. Choose your own gain and comfortable listening level; do not import Kyle's machine settings.
+Set up ordinary AE-5 playback in PipeWeaver. Its **System** source, internally `pipeweaver_system`, must reach the **Headphones** target attached to the AE-5. The local PipeWeaver API must answer at `127.0.0.1:14565`. Choose your own gain and comfortable listening level; do not import our machine settings.
 
 **The service needs an active ordinary stereo S32_LE / 96000 Hz stream before activation.** Select 96 kHz in your ordinary audio configuration and start your own familiar audio. Then inspect the selected card's hardware PCM as shown in step 7. A 96 kHz graph label alone is insufficient. If this baseline is silent or still negotiates 48 kHz, resolve it before proceeding; the package does not construct that baseline automatically.
 
@@ -317,7 +317,7 @@ Aurora RGB, Scout Mode, Dolby/DTS encoders, Creative cloud/preset libraries and 
 
 | Symptom | Check |
 | --- | --- |
-| 384 kHz displayed but no sound | Check both **Master Playback Switch** and **Front Playback Switch**, the selected output, and the Front DAC mute readback. This was Kyle's final recovery issue. Do not raise gain to diagnose silence. |
+| 384 kHz displayed but no sound | Check both **Master Playback Switch** and **Front Playback Switch**, the selected output, and the Front DAC mute readback. This was the final issue we resolved during recovery. Do not raise gain to diagnose silence. |
 | Still at 96 kHz | Confirm the custom module is actually loaded and the Direct service is active. Installing the panel or changing a PipeWire allowed-rate list does not activate Direct. |
 | Service waits or times out | Confirm ordinary active 96 kHz playback, PipeWeaver's unit/API, `pipeweaver_system`, and its link to the AE-5 output. Read the service journal. |
 | No compatible AE-5 in the panel | Check codec/subsystem, device permissions and the loaded driver. This preview rejects unqualified variants. |
@@ -399,6 +399,6 @@ Reboot, suspend/resume, fresh installation and full manual control testing are s
 
 ## Credits and license
 
-Kyle Monti / Aegiris Systems initiated the project, directed the hardware investigation and identified the mute condition that recovered audible output. The Linux implementation builds on CA0132 support by the upstream Linux/ALSA developers, including Connor McAdams and Creative's existing contributions. Upstream copyright and license notices are retained in the source.
+We built this project at Aegiris Systems through hardware investigation, driver development and recovery work. Our Linux implementation builds on CA0132 support by the upstream Linux/ALSA developers, including Connor McAdams and Creative's existing contributions. Upstream copyright and license notices are retained in the source.
 
 GPL-2.0-or-later except files with their own retained notices. The banner is original AI-generated project artwork, not a product photograph. Sound Blaster and Creative are trademarks of their respective owners. This is an independent community project, with no claim of Creative endorsement.
