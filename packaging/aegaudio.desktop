@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=AegAudio
+Comment=Independent Creative audio controls for Linux
+Exec=aegaudio
+Terminal=false
+Categories=AudioVideo;Audio;Mixer;

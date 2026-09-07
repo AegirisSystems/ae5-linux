@@ -1,0 +1,15 @@
+[Unit]
+Description=Restore AE-5 Direct audio before sleep and reactivate after resume
+Before=sleep.target
+StopWhenUnneeded=yes
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/python3 /usr/local/lib/ae5-direct/ae5_service.py prepare-sleep
+ExecStop=/usr/bin/python3 /usr/local/lib/ae5-direct/ae5_service.py resume
+TimeoutStartSec=190
+TimeoutStopSec=30
+
+[Install]
+RequiredBy=sleep.target

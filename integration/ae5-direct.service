@@ -1,0 +1,24 @@
+[Unit]
+Description=AE-5 native Direct audio at 384 kHz
+After=sound.target user@1000.service
+Requires=user@1000.service
+
+[Service]
+Type=notify
+NotifyAccess=main
+RuntimeDirectory=ae5-direct
+RuntimeDirectoryMode=0755
+RuntimeDirectoryPreserve=yes
+ExecCondition=/usr/bin/python3 /usr/local/lib/ae5-direct/ae5_service.py supported
+ExecStart=/usr/bin/python3 /usr/local/lib/ae5-direct/ae5_service.py run
+ExecStopPost=/usr/bin/python3 /usr/local/lib/ae5-direct/ae5_service.py cleanup
+TimeoutStartSec=540
+TimeoutStopSec=180
+Restart=no
+UMask=0022
+LimitRTPRIO=95
+LimitNICE=-11
+LimitRTTIME=200ms:2s
+
+[Install]
+WantedBy=multi-user.target
