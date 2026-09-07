@@ -1,0 +1,19 @@
+AE-5 ordinary-path capability capture, before Direct activation.
+Source: project read-only implementation-baseline.json; selected converter only.
+Codec 0x11020011 / subsystem 0x11020051.
+This records advertised capability and state, not an analog measurement.
+
+Node 0x02 [Audio Output] wcaps 0x49d: Stereo Amp-Out
+  Control: name="Front Playback Volume", index=0, device=0
+    ControlAmp: chs=3, dir=Out, idx=0, ofs=0
+  Device: name="CA0132 Analog", type="Audio", device=0
+  Amp-Out caps: ofs=0x5a, nsteps=0x63, stepsize=0x03, mute=1
+  Amp-Out vals:  [0xc3 0xc3]
+  Converter: stream=5, channel=0
+  PCM:
+    rates [0x1e4]: 16000 44100 48000 88200 96000
+    bits [0xa]: 16 24
+    formats [0x1]: PCM
+  Unsolicited: tag=00, enabled=0
+  Power states:  D0 D3 EPSS
+  Power: setting=D0, actual=D0
