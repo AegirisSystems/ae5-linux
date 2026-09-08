@@ -37,6 +37,12 @@ async function api(path, body) {
 }
 function find(name) { return DATA.controls.find(c => c.name === name); }
 const DAC_VOLUME='AE-5: Direct DAC Playback Volume';
+let DAC_LINKED = true;
+try { DAC_LINKED = localStorage.getItem('aegaudio.dacChannelsLinked') !== 'false'; } catch {}
+function dacLinkButton(c) {
+  if(c.name!==DAC_VOLUME || c.count!==2)return '';
+  return `<button type="button" class="channel-link" data-dac-link aria-label="Link left and right DAC channels" aria-pressed="${DAC_LINKED}" title="${DAC_LINKED?'Unlink channels':'Link channels'}" ${c.locked?'disabled':''}><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m10 13 4-4m-5 7-1 1a4 4 0 0 1-6-6l4-4a4 4 0 0 1 6 0m0 10a4 4 0 0 0 6 0l4-4a4 4 0 0 0-6-6l-1 1"/><path class="unlink-mark" d="m3 3 18 18"/></svg><span>${DAC_LINKED?'Linked':'Unlinked'}</span></button>`;
+}
 function editorValue(c,value) {
   return c.name===DAC_VOLUME ? c.db_min+(Number(value)-c.min)*c.db_step : value;
 }
@@ -73,7 +79,7 @@ function control(c, {compact=false}={}) {
     }
     return `<div class="readback">${esc(v)}</div>`;
   }).join('');
-  return `<form class="control" data-control="${c.numid}"><div class="control-head"><label>${esc(pretty(c))}</label><small>${esc(c.name)}</small></div><div class="control-body"><div class="editors">${editors}</div>${c.locked?'':`<button type="submit" disabled hidden>Apply</button>`}</div>${c.locked?`<p class="locked-note">${esc(c.locked)}</p>`:''}${c.protected?'<p class="hint">Hardware setting. Changing this requires a separate confirmation.</p>':''}</form>`;
+  return `<form class="control" data-control="${c.numid}"><div class="control-head"><label>${esc(pretty(c))}</label><small>${esc(c.name)}</small>${dacLinkButton(c)}</div><div class="control-body"><div class="editors">${editors}</div>${c.locked?'':`<button type="submit" disabled hidden>Apply</button>`}</div>${c.locked?`<p class="locked-note">${esc(c.locked)}</p>`:''}${c.protected?'<p class="hint">Hardware setting. Changing this requires a separate confirmation.</p>':''}</form>`;
 }
 function panel(heading,controls) {return `<section class="panel"><h2>${esc(heading)}</h2>${controls.length?controls.map(c=>control(c)).join(''):'<p class="muted">This driver does not expose a control for this section.</p>'}</section>`;}
 function heading(extra='') {return `<div class="page-heading"><div><h1>${titles[PAGE]}</h1><p>${intros[PAGE]}</p></div>${extra}</div>`;}
@@ -224,6 +230,16 @@ async function loadHistory() {
   catch(error){message(error.message,true);}
 }
 function bind() {
+  document.querySelectorAll('[data-dac-link]').forEach(button=>button.onclick=()=>{
+    if(BUSY)return;
+    DAC_LINKED=!DAC_LINKED;
+    try { localStorage.setItem('aegaudio.dacChannelsLinked',String(DAC_LINKED)); } catch {}
+    document.querySelectorAll('[data-dac-link]').forEach(b=>{
+      b.setAttribute('aria-pressed',String(DAC_LINKED));
+      b.title=DAC_LINKED?'Unlink channels':'Link channels';
+      b.querySelector('span').textContent=DAC_LINKED?'Linked':'Unlinked';
+    });
+  });
   document.querySelectorAll('[data-toggle]').forEach(button=>button.onclick=()=>{
     const c=DATA.controls.find(c=>c.numid===Number(button.dataset.toggle));
     writeControl(c,c.values.map(()=>c.values.every(v=>v==='on')?'off':'on'));
@@ -275,7 +291,13 @@ function bind() {
       if(!button)return;
       const i=event.target.dataset.i??event.target.dataset.number;
       if(c.type==='INTEGER'&&i!==undefined){
-        const value=event.target.value;form.querySelector(`[data-i="${i}"]`).value=value;form.querySelector(`[data-number="${i}"]`).value=value;form.querySelector(`[data-output="${i}"]`).textContent=level(c,controlValue(c,value));
+        const value=event.target.value;
+        const channels=c.name===DAC_VOLUME&&DAC_LINKED?c.values.map((_,n)=>n):[i];
+        for(const channel of channels){
+          form.querySelector(`[data-i="${channel}"]`).value=value;
+          form.querySelector(`[data-number="${channel}"]`).value=value;
+          form.querySelector(`[data-output="${channel}"]`).textContent=level(c,controlValue(c,value));
+        }
       }
       button.disabled=JSON.stringify(values())===JSON.stringify(c.values);
       form.dataset.dirty=String(!button.disabled);
